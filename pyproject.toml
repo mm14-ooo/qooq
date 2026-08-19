@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qooq"
+version = "0.1.0"
+description = "A long-term-memory interactive fiction engine driven by Claude"
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic>=0.70",
+    "pydantic>=2.0",
+]
+
+[project.scripts]
+qooq = "qooq.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["qooq*"]
+
+[tool.setuptools.package-data]
+qooq = ["worlds/*.json"]
