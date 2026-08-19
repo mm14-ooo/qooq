@@ -1,7 +1,7 @@
-import pytest
-from fake_client import FakeClient, delta
+import json
 
-from qooq import context, db
+import pytest
+
 from qooq.config import EngineConfig
 from qooq.engine import Engine
 from qooq.world import World
@@ -15,58 +15,79 @@ WORLD = World(
 )
 
 
-def make_engine(tmp_path, client=None, config=None):
-    return Engine.create(tmp_path / "s.db", WORLD, client=client, config=config)
+def reply(prose="老陳推門進來，肩上濕透。", **record):
+    payload = {"scene": "", "events": [], "entities": [], "relations": [], "flags": {}}
+    payload.update(record)
+    return f"{prose}\n\n```json\n{json.dumps(payload, ensure_ascii=False)}\n```"
 
 
-def test_new_save_seeds_offline(tmp_path):
-    engine = make_engine(tmp_path)
+@pytest.fixture
+def engine(tmp_path):
+    return Engine.create(tmp_path / "s.db", WORLD)
+
+
+def test_new_save_seeds_offline(engine):
     assert engine.store.turn == 0
     assert engine.store.recent_turns(1)[0]["narration"] == "雨沒有停。"
     assert engine.store.state_snapshot()["flags"]["夜次"] == "第七夜"
 
 
 def test_cannot_create_over_an_existing_save(tmp_path):
-    make_engine(tmp_path).close()
+    Engine.create(tmp_path / "s.db", WORLD).close()
     with pytest.raises(FileExistsError):
         Engine.create(tmp_path / "s.db", WORLD)
 
 
 def test_load_restores_the_world_bible(tmp_path):
-    make_engine(tmp_path).close()
-    engine = Engine.load(tmp_path / "s.db")
-    assert engine.world.title == "測試作品"
-    assert engine.world.rules == ["讀取記憶必然有代價。"]
+    Engine.create(tmp_path / "s.db", WORLD).close()
+    reloaded = Engine.load(tmp_path / "s.db")
+    assert reloaded.world.title == "測試作品"
+    assert reloaded.world.rules == ["讀取記憶必然有代價。"]
 
 
-def test_play_writes_prose_and_memory(tmp_path):
-    client = FakeClient(
-        narrations=["老陳推門進來，肩上濕透。"],
-        deltas=[
-            delta(
-                location="當鋪",
-                events=[{"summary": "老陳冒雨走進當鋪", "importance": 3,
-                         "participants": ["老陳", "掌櫃"]}],
-                entities=[{"name": "老陳", "kind": "character", "summary": "碼頭工人",
-                           "facts": [{"key": "狀態", "value": "全身濕透"}]}],
-                relations=[{"source": "掌櫃", "target": "老陳", "kind": "認識",
-                            "strength": 1}],
-                flags=[{"key": "門外", "value": "已進門"}],
-            )
-        ],
-    )
-    engine = make_engine(tmp_path, client)
-    chunks = []
-    result = engine.play("開門", on_text=chunks.append)
+def test_prompt_carries_world_state_and_action(engine):
+    pending = engine.begin_turn("開門")
+    assert "測試作品" in pending.prompt
+    assert "讀取記憶必然有代價。" in pending.prompt
+    assert "第七夜" in pending.prompt          # seeded flag
+    assert "雨沒有停。" in pending.prompt        # verbatim opening
+    assert "開門" in pending.prompt
+
+
+def test_pending_state_survives_a_reload(tmp_path):
+    engine = Engine.create(tmp_path / "s.db", WORLD)
+    engine.begin_turn("開門")
+    engine.close()
+
+    # The player closed the browser, pasted into their AI, and came back.
+    reopened = Engine.load(tmp_path / "s.db")
+    assert reopened.pending_action() == "開門"
+    result = reopened.ingest(reply())
+    assert result.turn == 1
+    assert reopened.pending_action() is None
+
+
+def test_ingest_writes_prose_and_memory(engine):
+    engine.begin_turn("開門")
+    result = engine.ingest(reply(
+        scene="當鋪",
+        events=[{"summary": "老陳冒雨走進當鋪", "importance": 3,
+                 "participants": ["老陳", "掌櫃"]}],
+        entities=[{"name": "老陳", "kind": "character", "summary": "碼頭工人",
+                   "facts": {"狀態": "全身濕透"}}],
+        relations=[{"from": "掌櫃", "to": "老陳", "kind": "認識", "strength": 1}],
+        flags={"門外": "已進門"},
+    ))
 
     assert result.turn == 1
-    assert result.narration == "老陳推門進來，肩上濕透。"
-    assert "".join(chunks) == result.narration  # streamed incrementally
     assert not result.warning
+    # entities counts what the record declared; 掌櫃 is auto-created by the
+    # relation rather than declared, so it is not counted here.
+    assert result.written == {"entities": 1, "facts": 1, "events": 1,
+                              "relations": 1, "flags": 1}
 
     snap = engine.store.state_snapshot()
-    names = {e["name"] for e in snap["entities"]}
-    assert {"老陳", "掌櫃"} <= names
+    assert {"老陳", "掌櫃"} <= {e["name"] for e in snap["entities"]}
     assert snap["flags"]["門外"] == "已進門"
     assert snap["flags"]["__scene__"] == "當鋪"
     chen = engine.store.resolve_entity("老陳")
@@ -75,116 +96,97 @@ def test_play_writes_prose_and_memory(tmp_path):
     }
 
 
-def test_prose_survives_an_archivist_failure(tmp_path):
-    class Broken(FakeClient):
-        def next_delta(self):
-            raise RuntimeError("schema boom")
-
-    engine = make_engine(tmp_path, Broken(narrations=["門開了。"]))
-    result = engine.play("開門")
-
-    assert result.narration == "門開了。"
-    assert "寫入長期記憶失敗" in result.warning
-    # The turn is still on disk after the rollback of the memory write.
-    reloaded = Engine.load(tmp_path / "s.db")
-    assert reloaded.store.turn == 1
-    assert reloaded.store.recent_turns(1)[0]["narration"] == "門開了。"
+def test_prose_is_kept_when_the_json_is_missing(engine):
+    engine.begin_turn("開門")
+    result = engine.ingest("門開了，什麼也沒有。")
+    assert result.turn == 1
+    assert result.narration == "門開了，什麼也沒有。"
+    assert "沒有寫入長期記憶" in result.warning
+    assert engine.store.turn == 1
 
 
-def test_unparseable_extraction_is_reported_not_raised(tmp_path):
-    client = FakeClient(narrations=["門開了。"], deltas=[None])
-    result = make_engine(tmp_path, client).play("開門")
-    assert "未寫入長期記憶" in result.warning
-
-
-def test_empty_action_is_rejected(tmp_path):
+def test_ingest_without_a_pending_turn_is_rejected(engine):
     with pytest.raises(ValueError):
-        make_engine(tmp_path, FakeClient()).play("   ")
+        engine.ingest(reply())
 
 
-def test_recall_feeds_retrieved_memories_into_the_prompt(tmp_path):
-    client = FakeClient()
-    engine = make_engine(tmp_path, client)
+def test_ingest_with_an_explicit_action_bypasses_pending(engine):
+    assert engine.ingest(reply(), action="臨時補一回合").turn == 1
+
+
+def test_empty_action_is_rejected(engine):
+    with pytest.raises(ValueError):
+        engine.begin_turn("   ")
+
+
+def test_empty_prose_is_rejected(engine):
+    engine.begin_turn("開門")
+    with pytest.raises(ValueError):
+        engine.ingest("```json\n{}\n```")
+
+
+def test_cancel_clears_the_pending_turn(engine):
+    engine.begin_turn("開門")
+    engine.cancel_pending()
+    assert engine.pending_action() is None
+
+
+def test_recall_feeds_relevant_memories_into_the_prompt(engine):
     engine.store.add_event("老陳把一枚銅鑰匙押在當鋪", turn=1, importance=4,
                            participants=["老陳"])
     for n in range(2, 12):
         engine.store.record_turn(n, f"行動{n}", f"敘述{n}")
     engine.conn.commit()
 
-    engine.play("我想起那枚銅鑰匙")
-
-    briefing = client.stream_calls[0]["messages"][-1]["content"]
-    assert "銅鑰匙" in briefing
+    prompt = engine.begin_turn("我想起那枚銅鑰匙").prompt
+    assert "銅鑰匙" in prompt
 
 
-def test_consolidation_compresses_old_memory(tmp_path):
+def test_malformed_importance_does_not_break_the_write(engine):
+    engine.begin_turn("開門")
+    result = engine.ingest(reply(
+        events=[{"summary": "有人進來了", "importance": "很高"}],
+        entities=[{"name": "訪客", "importance": None}],
+    ))
+    assert result.written["events"] == 1
+    assert engine.store.conn.execute(
+        "SELECT importance FROM events WHERE summary = '有人進來了'"
+    ).fetchone()[0] == 2   # fell back to the default rather than raising
+
+
+def test_nameless_records_are_skipped_not_fatal(engine):
+    engine.begin_turn("開門")
+    result = engine.ingest(reply(
+        entities=[{"name": "  "}, {"name": "老陳"}],
+        events=[{"summary": ""}, {"summary": "老陳進來了"}],
+        relations=[{"from": "老陳", "to": ""}],
+    ))
+    assert result.written == {"entities": 1, "facts": 0, "events": 1,
+                              "relations": 0, "flags": 0}
+
+
+def test_consolidation_becomes_due_and_compresses(tmp_path):
     config = EngineConfig()
     config.consolidate_after_events = 8
     config.consolidate_keep_turns = 2
 
-    client = FakeClient()
-    engine = make_engine(tmp_path, client, config)
+    engine = Engine.create(tmp_path / "s.db", WORLD, config)
+    assert not engine.consolidation_due()
+
     for n in range(1, 15):
         engine.store.record_turn(n, f"行動{n}", f"敘述{n}")
         engine.store.add_event(f"事件{n}", turn=n, importance=2)
     engine.conn.commit()
 
-    client.narrations = ["第十五回合的敘述。", "序章\n\n掌櫃度過了漫長的七夜。"]
-    result = engine.play("繼續")
+    assert engine.consolidation_due()
+    prompt = engine.consolidation_prompt()
+    assert "事件1" in prompt and "輸出格式" in prompt
 
-    assert result.consolidated
+    message = engine.ingest_chapter("序章\n\n掌櫃度過了漫長的七夜。")
+    assert "序章" in message
     chapters = engine.store.chapters()
-    assert len(chapters) == 1
-    assert chapters[0]["title"] == "序章"
-    assert "漫長的七夜" in chapters[0]["summary"]
-    # Compressed events stay in the database but leave the retrieval pool.
+    assert len(chapters) == 1 and "漫長的七夜" in chapters[0]["summary"]
+
     stats = engine.store.stats()
-    assert stats["events"] > stats["events_live"]
-
-
-def test_request_shape_matches_the_api_contract(tmp_path):
-    client = FakeClient(narrations=["好。"])
-    engine = make_engine(tmp_path, client)
-    engine.play("開門")
-
-    call = client.stream_calls[0]
-    assert call["model"] == "claude-opus-5"
-    assert call["thinking"] == {"type": "adaptive"}
-    assert call["output_config"]["effort"] == "high"
-    # Opus 5 removed sampling parameters and assistant prefill.
-    assert "temperature" not in call and "top_p" not in call
-    assert call["messages"][-1]["role"] != "assistant"
-    assert call["system"][0]["cache_control"] == {"type": "ephemeral"}
-
-    parse = client.parse_calls[0]
-    assert parse["output_format"].__name__ == "MemoryDelta"
-
-
-def test_memory_briefing_uses_the_operator_channel_on_supporting_models(tmp_path):
-    client = FakeClient(narrations=["好。"])
-    engine = make_engine(tmp_path, client)
-    engine.play("開門")
-
-    messages = client.stream_calls[0]["messages"]
-    assert messages[-1]["role"] == "system"          # briefing = operator data
-    assert messages[-2]["role"] == "user"            # action = player data
-    assert "【玩家行動】開門" in messages[-2]["content"]
-
-
-def test_briefing_falls_back_inline_on_models_without_system_messages(tmp_path):
-    config = EngineConfig()
-    config.narrator_model = "claude-sonnet-5"
-    client = FakeClient(narrations=["好。"])
-    engine = make_engine(tmp_path, client, config)
-    engine.play("開門")
-
-    messages = client.stream_calls[0]["messages"]
-    assert all(m["role"] != "system" for m in messages)
-    assert "【玩家行動】開門" in messages[-1]["content"]
-
-
-def test_supports_system_messages_gate():
-    assert context.supports_system_messages("claude-opus-5")
-    assert context.supports_system_messages("claude-fable-5")
-    assert not context.supports_system_messages("claude-sonnet-5")
-    assert not context.supports_system_messages("claude-haiku-4-5")
+    assert stats["events"] > stats["events_live"]   # kept on disk, out of recall
+    assert not engine.consolidation_due()

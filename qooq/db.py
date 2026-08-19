@@ -117,11 +117,16 @@ CREATE TABLE IF NOT EXISTS chapters (
 """
 
 
-def connect(path: str | Path) -> sqlite3.Connection:
-    """Open (creating if needed) a save file with the schema applied."""
+def connect(path: str | Path, same_thread: bool = True) -> sqlite3.Connection:
+    """Open (creating if needed) a save file with the schema applied.
+
+    `same_thread=False` relaxes SQLite's thread-affinity check, which is only
+    safe if the caller serialises every access itself.  The web server does
+    (one global lock around each request); nothing else should pass it.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path))
+    conn = sqlite3.connect(str(path), check_same_thread=same_thread)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")

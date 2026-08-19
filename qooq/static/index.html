@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>qooq</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Ctext y=%2726%27 font-size=%2728%27%3E%F0%9F%8F%AE%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #14120f; --panel: #1c1916; --edge: #2e2822; --ink: #e8e2d8;
+    --dim: #9a9086; --accent: #c9a227; --warn: #d98b4a; --ok: #7fa86b;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.75 "Noto Serif TC", "Songti TC", Georgia, serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 5; background: rgba(20,18,15,.95);
+    border-bottom: 1px solid var(--edge); padding: 12px 20px;
+    display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+    backdrop-filter: blur(8px);
+  }
+  header h1 { font-size: 18px; margin: 0; letter-spacing: .04em; }
+  header .stats { font: 12px/1.6 var(--mono); color: var(--dim); }
+  main { display: grid; grid-template-columns: minmax(0,1fr) 340px; gap: 24px;
+         max-width: 1280px; margin: 0 auto; padding: 24px 20px 96px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+
+  section { background: var(--panel); border: 1px solid var(--edge);
+            border-radius: 10px; padding: 18px; margin-bottom: 18px; }
+  h2 { font: 600 13px/1.4 var(--mono); letter-spacing: .1em; text-transform: uppercase;
+       color: var(--dim); margin: 0 0 12px; }
+
+  .turn { padding-bottom: 18px; margin-bottom: 18px; border-bottom: 1px solid var(--edge); }
+  .turn:last-child { border-bottom: 0; margin-bottom: 0; padding-bottom: 0; }
+  .action { font: 13px/1.6 var(--mono); color: var(--accent); margin-bottom: 10px; }
+  .action::before { content: "▸ "; }
+  .prose { white-space: pre-wrap; }
+  .prose.opening { color: var(--dim); font-style: italic; }
+
+  textarea {
+    width: 100%; background: #100e0c; color: var(--ink); border: 1px solid var(--edge);
+    border-radius: 8px; padding: 12px; font: 14px/1.7 var(--mono); resize: vertical;
+  }
+  textarea:focus { outline: none; border-color: var(--accent); }
+  textarea[readonly] { color: var(--dim); }
+
+  button {
+    background: var(--accent); color: #14120f; border: 0; border-radius: 7px;
+    padding: 9px 18px; font: 600 14px/1 system-ui, sans-serif; cursor: pointer;
+  }
+  button:hover { filter: brightness(1.12); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.ghost { background: transparent; color: var(--dim); border: 1px solid var(--edge); }
+  button.ghost:hover { color: var(--ink); border-color: var(--dim); filter: none; }
+  .row { display: flex; gap: 10px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+  .grow { flex: 1; }
+
+  .step { font: 600 12px/1 var(--mono); color: var(--accent); letter-spacing: .08em;
+          margin-bottom: 8px; }
+  .note { font: 13px/1.6 system-ui, sans-serif; color: var(--dim); margin: 8px 0 0; }
+  .msg { border-radius: 7px; padding: 10px 12px; margin-top: 12px;
+         font: 13px/1.6 system-ui, sans-serif; }
+  .msg.warn { background: rgba(217,139,74,.12); color: var(--warn);
+              border: 1px solid rgba(217,139,74,.3); }
+  .msg.ok { background: rgba(127,168,107,.1); color: var(--ok);
+            border: 1px solid rgba(127,168,107,.28); }
+  .hidden { display: none !important; }
+
+  aside section { font: 13px/1.65 system-ui, -apple-system, sans-serif; }
+  aside .scroll { max-height: 420px; overflow-y: auto; margin: -4px -6px -4px 0;
+                  padding: 4px 6px 4px 0; scrollbar-width: thin; }
+  aside .scroll::-webkit-scrollbar { width: 6px; }
+  aside .scroll::-webkit-scrollbar-thumb { background: var(--edge); border-radius: 3px; }
+  .ent { margin-bottom: 10px; }
+  .ent b { font-weight: 600; }
+  .kind { font: 10px/1 var(--mono); color: var(--bg); background: var(--dim);
+          border-radius: 3px; padding: 3px 5px; margin-right: 6px;
+          text-transform: uppercase; letter-spacing: .06em; }
+  .facts { color: var(--dim); font-size: 12px; margin: 3px 0 0 4px; }
+  .kv { display: flex; justify-content: space-between; gap: 10px; color: var(--dim);
+        font: 12px/1.8 var(--mono); border-bottom: 1px dotted var(--edge); }
+  .kv span:last-child { color: var(--ink); text-align: right; }
+  .ev { color: var(--dim); font-size: 12.5px; margin-bottom: 8px; }
+  .ev b { color: var(--accent); font: 11px/1 var(--mono); }
+  details summary { cursor: pointer; color: var(--dim); font: 12px/1.6 var(--mono); }
+  input[type=search] {
+    width: 100%; margin-top: 10px; background: #100e0c; color: var(--ink);
+    border: 1px solid var(--edge); border-radius: 6px; padding: 8px;
+    font: 13px var(--mono);
+  }
+  .score { font: 11px/1.5 var(--mono); color: var(--dim); }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">qooq</h1>
+  <span class="stats" id="stats"></span>
+</header>
+
+<main>
+  <div>
+    <section id="story"><h2>故事</h2><div id="transcript"></div></section>
+
+    <section id="compose">
+      <h2>接下來</h2>
+      <div id="step-action">
+        <div class="step">步驟 1／2　寫下你的行動</div>
+        <textarea id="action" rows="3" placeholder="例如：掀開麻布，看看鐵櫃裡那段記憶"></textarea>
+        <div class="row">
+          <button id="btn-prompt">產生 Prompt</button>
+          <span class="note grow" id="hint">產生後複製貼給 AI，再把 AI 的回覆貼回來。</span>
+        </div>
+      </div>
+
+      <div id="step-paste" class="hidden">
+        <div class="step">步驟 2／2　貼給 AI，再把回覆貼回來</div>
+        <p class="note" style="margin-top:0">目前的行動：<b id="pending-action"></b></p>
+        <textarea id="prompt" rows="10" readonly></textarea>
+        <div class="row">
+          <button id="btn-copy">複製 Prompt</button>
+          <button class="ghost" id="btn-cancel">取消這回合</button>
+        </div>
+        <textarea id="reply" rows="8" style="margin-top:16px"
+                  placeholder="把 AI 的整段回覆貼在這裡（散文 + JSON 一起貼，不用自己拆）"></textarea>
+        <div class="row"><button id="btn-ingest">送出回覆</button></div>
+      </div>
+
+      <div id="messages"></div>
+    </section>
+
+    <section id="consolidate" class="hidden">
+      <h2>記憶壓縮</h2>
+      <p class="note" style="margin-top:0">
+        舊記憶累積夠多了。壓縮成一段前情提要，可以讓之後的 Prompt 不再變長。</p>
+      <div class="row"><button id="btn-chapter">產生壓縮 Prompt</button></div>
+      <div id="chapter-box" class="hidden">
+        <textarea id="chapter-prompt" rows="8" readonly style="margin-top:12px"></textarea>
+        <div class="row"><button id="btn-chapter-copy">複製</button></div>
+        <textarea id="chapter-reply" rows="5" style="margin-top:12px"
+                  placeholder="把 AI 寫的前情提要貼在這裡"></textarea>
+        <div class="row"><button id="btn-chapter-ingest">送出</button></div>
+      </div>
+    </section>
+  </div>
+
+  <aside>
+    <section><h2>狀態</h2><div id="mem-state" class="scroll"></div></section>
+    <section><h2>旗標</h2><div id="mem-flags"></div></section>
+    <section><h2>近期記憶</h2><div id="mem-events" class="scroll"></div></section>
+    <section>
+      <h2>檢索測試</h2>
+      <input type="search" id="recall" placeholder="輸入關鍵字，看檢索排序">
+      <div id="recall-out" style="margin-top:10px"></div>
+    </section>
+  </aside>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => (s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  const data = await res.json().catch(() => ({error: "回應不是 JSON"}));
+  if (!res.ok || data.error) throw new Error(data.error || ("HTTP " + res.status));
+  return data;
+}
+const post = (path, body) => api(path, {
+  method: "POST", headers: {"Content-Type": "application/json"},
+  body: JSON.stringify(body || {})
+});
+
+function message(text, kind) {
+  if (!text) return;
+  const div = document.createElement("div");
+  div.className = "msg " + (kind || "warn");
+  div.textContent = text;
+  $("messages").appendChild(div);
+  setTimeout(() => div.remove(), 12000);
+}
+
+async function copyText(text, button) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const ta = document.createElement("textarea");
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    document.execCommand("copy"); ta.remove();
+  }
+  const label = button.textContent;
+  button.textContent = "已複製 ✓";
+  setTimeout(() => { button.textContent = label; }, 1600);
+}
+
+function renderState(s) {
+  $("title").textContent = s.title;
+  const t = s.stats;
+  $("stats").textContent =
+    `第 ${s.turn} 回合　實體 ${t.entities}　屬性 ${t.facts}　關係 ${t.relations}` +
+    `　事件 ${t.events_live}/${t.events}　章節 ${t.chapters}`;
+
+  $("transcript").innerHTML = s.transcript.map(turn => `
+    <div class="turn">
+      ${turn.n === 0 ? "" : `<div class="action">${esc(turn.player_input)}</div>`}
+      <div class="prose ${turn.n === 0 ? "opening" : ""}">${esc(turn.narration)}</div>
+    </div>`).join("");
+  window.scrollTo({top: document.body.scrollHeight, behavior: "smooth"});
+
+  $("consolidate").classList.toggle("hidden", !s.consolidation_due);
+
+  if (s.pending) {
+    $("pending-action").textContent = s.pending;
+    $("step-action").classList.add("hidden");
+    $("step-paste").classList.remove("hidden");
+  } else {
+    $("step-action").classList.remove("hidden");
+    $("step-paste").classList.add("hidden");
+    $("prompt").value = ""; $("reply").value = "";
+  }
+}
+
+async function refreshMemory() {
+  const m = await api("/api/memory");
+  const labels = {character:"人物", location:"地點", item:"物品",
+                  faction:"勢力", concept:"概念"};
+  $("mem-state").innerHTML = (m.entities || []).map(e => `
+    <div class="ent">
+      <span class="kind">${labels[e.kind] || e.kind}</span><b>${esc(e.name)}</b>
+      ${e.status && e.status !== "active" ? ` <span class="score">(${esc(e.status)})</span>` : ""}
+      ${e.summary ? `<div class="facts">${esc(e.summary)}</div>` : ""}
+      ${Object.entries(e.facts || {}).map(([k, v]) =>
+        `<div class="facts">· ${esc(k)}：${esc(v)}</div>`).join("")}
+    </div>`).join("") || `<span class="score">（還沒有實體）</span>`;
+
+  const rel = (m.relations || []).map(r =>
+    `<div class="facts">${esc(r.src)} →(${esc(r.kind)} ${r.strength >= 0 ? "+" : ""}${r.strength})→ ${esc(r.dst)}</div>`
+  ).join("");
+  if (rel) $("mem-state").innerHTML += `<h2 style="margin-top:16px">關係</h2>${rel}`;
+
+  $("mem-flags").innerHTML = Object.entries(m.flags || {})
+    .filter(([k]) => !k.startsWith("__"))
+    .map(([k, v]) => `<div class="kv"><span>${esc(k)}</span><span>${esc(v)}</span></div>`)
+    .join("") || `<span class="score">（還沒有旗標）</span>`;
+
+  const chapters = (m.chapters || []).map(c => `
+    <details style="margin-bottom:10px">
+      <summary>《${esc(c.title)}》第${c.from_turn}–${c.to_turn}回合</summary>
+      <div class="facts" style="margin-top:6px">${esc(c.summary)}</div>
+    </details>`).join("");
+
+  $("mem-events").innerHTML = chapters + (m.events || []).map(e => `
+    <div class="ev"><b>[${e.turn}｜${e.importance}]</b> ${esc(e.summary)}
+      ${e.participants.length ? `<div class="score">${esc(e.participants.join("、"))}</div>` : ""}
+    </div>`).join("");
+}
+
+async function refresh(state) {
+  renderState(state || await api("/api/state"));
+  await refreshMemory();
+}
+
+$("btn-prompt").onclick = async () => {
+  const action = $("action").value.trim();
+  if (!action) return;
+  try {
+    const data = await post("/api/prompt", {action});
+    $("prompt").value = data.prompt;
+    $("action").value = "";
+    await refresh();
+    await copyText(data.prompt, $("btn-copy"));
+    message("Prompt 已產生並複製到剪貼簿，貼給 AI 後把回覆貼回下面的框。", "ok");
+  } catch (e) { message(e.message); }
+};
+
+$("btn-copy").onclick = () => copyText($("prompt").value, $("btn-copy"));
+$("btn-cancel").onclick = async () => { await post("/api/cancel"); await refresh(); };
+
+$("btn-ingest").onclick = async () => {
+  const reply = $("reply").value.trim();
+  if (!reply) return;
+  $("btn-ingest").disabled = true;
+  try {
+    const data = await post("/api/ingest", {reply});
+    await refresh(data.state);
+    const w = data.written || {};
+    const parts = Object.entries(w).filter(([, n]) => n)
+      .map(([k, n]) => ({entities:"實體", facts:"屬性", events:"事件",
+                         relations:"關係", flags:"旗標"}[k] + n)).join("、");
+    message(`第 ${data.turn} 回合已寫入。${parts ? "記憶：" + parts : "沒有新記憶。"}`, "ok");
+    if (data.warning) message(data.warning);
+  } catch (e) { message(e.message); }
+  finally { $("btn-ingest").disabled = false; }
+};
+
+$("btn-chapter").onclick = async () => {
+  try {
+    const data = await api("/api/chapter-prompt");
+    $("chapter-prompt").value = data.prompt;
+    $("chapter-box").classList.remove("hidden");
+    await copyText(data.prompt, $("btn-chapter-copy"));
+  } catch (e) { message(e.message); }
+};
+$("btn-chapter-copy").onclick = () => copyText($("chapter-prompt").value, $("btn-chapter-copy"));
+$("btn-chapter-ingest").onclick = async () => {
+  try {
+    const data = await post("/api/chapter", {reply: $("chapter-reply").value});
+    $("chapter-reply").value = ""; $("chapter-box").classList.add("hidden");
+    await refresh(data.state);
+    message(data.message, "ok");
+  } catch (e) { message(e.message); }
+};
+
+let recallTimer;
+$("recall").oninput = () => {
+  clearTimeout(recallTimer);
+  recallTimer = setTimeout(async () => {
+    const q = $("recall").value.trim();
+    if (!q) { $("recall-out").innerHTML = ""; return; }
+    const data = await api("/api/recall?q=" + encodeURIComponent(q));
+    $("recall-out").innerHTML = data.results.map(r => `
+      <div class="ev"><b>${r.score.toFixed(2)}</b> [${r.turn}｜${r.importance}] ${esc(r.summary)}
+        <div class="score">${Object.entries(r.parts).map(([k, v]) => k + "=" + v).join("  ")}</div>
+      </div>`).join("") || `<span class="score">（沒有相關記憶）</span>`;
+  }, 250);
+};
+
+$("action").addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") $("btn-prompt").click();
+});
+$("reply").addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") $("btn-ingest").click();
+});
+
+refresh().catch(e => message(e.message));
+</script>
+</body>
+</html>

@@ -11,14 +11,13 @@ from pathlib import Path
 from . import db
 from .config import SAVE_DIR, EngineConfig
 from .engine import Engine
-from .llm import QooqError, build_client, describe_api_error
 from .memory import MemoryStore
 from .world import World, bundled_world_path
 
-BANNER = """\
-qooq — 有長期記憶的互動小說
-輸入行動即可推進故事。指令：/memory /state /recall <關鍵字> /log /help /quit
-"""
+
+
+class QooqError(RuntimeError):
+    pass
 
 
 def save_path(name: str) -> Path:
@@ -108,7 +107,7 @@ def cmd_new(args) -> int:
     if args.title:
         world.title = args.title
     path = save_path(args.name)
-    engine = Engine.create(path, world, client=None, config=EngineConfig())
+    engine = Engine.create(path, world, config=EngineConfig())
     print(f"已建立存檔：{path}")
     print(f"作品：{world.title}\n")
     print(engine.store.recent_turns(1)[0]["narration"])
@@ -116,84 +115,43 @@ def cmd_new(args) -> int:
     return 0
 
 
-def cmd_play(args) -> int:
+def cmd_serve(args) -> int:
+    from . import web
+
     path = save_path(args.name)
     if not path.exists():
         print(f"找不到存檔 {path}。先執行：qooq new {args.name}", file=sys.stderr)
         return 1
+    web.serve(path, host=args.host, port=args.port, open_browser=not args.no_browser)
+    return 0
 
-    config = EngineConfig()
-    if args.effort:
-        config.narrator_effort = args.effort
-    if args.model:
-        config.narrator_model = args.model
 
-    engine = Engine.load(path, client=build_client(), config=config)
-    print(BANNER)
-    print(f"《{engine.world.title}》　第 {engine.store.turn} 回合\n")
-    last = engine.store.recent_turns(1)
-    if last:
-        print(last[-1]["narration"], "\n")
+def cmd_prompt(args) -> int:
+    """Terminal fallback: print the prompt to paste into an AI."""
+    engine = Engine.load(save_path(args.name))
+    pending = engine.begin_turn(args.action)
+    print(pending.prompt)
+    if args.verbose:
+        print("\n--- 取用的記憶 ---", file=sys.stderr)
+        for m in pending.memories:
+            print(f"{m.score:5.2f} [第{m.turn}回合] {m.summary}", file=sys.stderr)
+    engine.close()
+    return 0
 
-    try:
-        while True:
-            try:
-                raw = input("> ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print()
-                break
-            if not raw:
-                continue
 
-            if raw.startswith("/"):
-                command, _, rest = raw[1:].partition(" ")
-                if command in ("quit", "q", "exit"):
-                    break
-                if command in ("help", "h"):
-                    print(BANNER)
-                elif command == "memory":
-                    print_memory(engine.store)
-                elif command == "state":
-                    print(json.dumps(engine.store.state_snapshot(), ensure_ascii=False, indent=2))
-                elif command == "recall":
-                    if rest.strip():
-                        print_recall(engine.store, rest.strip(), args.recall_limit)
-                    else:
-                        print("用法：/recall <關鍵字>")
-                elif command == "log":
-                    for row in engine.store.recent_turns(10):
-                        print(f"\n[{row['n']}] > {row['player_input']}\n{row['narration']}")
-                else:
-                    print(f"未知指令 /{command}")
-                print()
-                continue
-
-            try:
-                result = engine.play(raw, on_text=lambda t: print(t, end="", flush=True))
-            except QooqError as exc:
-                print(f"\n[!] {exc}\n")
-                continue
-            except Exception as exc:
-                print(f"\n[!] {describe_api_error(exc)}\n")
-                continue
-
-            print("\n")
-            if args.verbose and result.memories:
-                print("  ⟨取用記憶⟩")
-                for m in result.memories:
-                    print(f"    {m.score:5.2f} [第{m.turn}回合] {m.summary}")
-            if args.verbose and result.written:
-                written = "、".join(f"{k}{v}" for k, v in result.written.items() if v)
-                print(f"  ⟨寫入記憶⟩ {written or '無'}")
-            if result.consolidated:
-                print(f"  ⟨壓縮章節⟩ {result.consolidated}")
-            if result.warning:
-                print(f"  [!] {result.warning}")
-            if args.verbose:
-                print()
-    finally:
-        engine.close()
-    print("已存檔。")
+def cmd_ingest(args) -> int:
+    """Terminal fallback: read the AI's reply from a file or stdin."""
+    engine = Engine.load(save_path(args.name))
+    reply = Path(args.file).read_text(encoding="utf-8") if args.file else sys.stdin.read()
+    result = engine.ingest(reply)
+    print(f"[第 {result.turn} 回合已寫入]\n")
+    print(result.narration)
+    if result.written:
+        written = "、".join(f"{k}{v}" for k, v in result.written.items() if v)
+        print(f"\n記憶：{written or '無'}")
+    if result.warning:
+        print(f"\n[!] {result.warning}")
+    engine.close()
     return 0
 
 
@@ -240,13 +198,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--title", help="覆寫作品標題")
     p.set_defaults(func=cmd_new)
 
-    p = sub.add_parser("play", help="開始／繼續遊玩")
+    p = sub.add_parser("serve", help="開啟網頁介面（主要玩法）")
     p.add_argument("name")
-    p.add_argument("-v", "--verbose", action="store_true", help="顯示記憶取用與寫入")
-    p.add_argument("--effort", choices=["low", "medium", "high", "xhigh", "max"])
-    p.add_argument("--model", help="覆寫敘事模型")
-    p.add_argument("--recall-limit", type=int, default=8)
-    p.set_defaults(func=cmd_play)
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--no-browser", action="store_true", help="不要自動開瀏覽器")
+    p.set_defaults(func=cmd_serve)
+
+    p = sub.add_parser("prompt", help="（終端機版）印出要貼給 AI 的 prompt")
+    p.add_argument("name")
+    p.add_argument("action")
+    p.add_argument("-v", "--verbose", action="store_true", help="在 stderr 顯示取用的記憶")
+    p.set_defaults(func=cmd_prompt)
+
+    p = sub.add_parser("ingest", help="（終端機版）讀入 AI 的回覆")
+    p.add_argument("name")
+    p.add_argument("--file", help="回覆檔案路徑，省略則讀 stdin")
+    p.set_defaults(func=cmd_ingest)
 
     p = sub.add_parser("memory", help="檢視長期記憶")
     p.add_argument("name")
